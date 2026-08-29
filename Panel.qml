@@ -14,6 +14,8 @@ Panel {
   property var accounts: []
   property string errorText: ""
   property int selectedIndex: 0
+  property string focusSection: "accounts"
+  property bool cursorActive: false
   property string copiedName: ""
   property string pendingCopyName: ""
   property int tickEpoch: Math.floor(Date.now() / 1000)
@@ -24,6 +26,7 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property bool headerHasCursor: cursorActive && focusSection === "header"
 
   function open() {
     tickEpoch = Math.floor(Date.now() / 1000)
@@ -37,6 +40,7 @@ Panel {
     accounts = []
     errorText = ""
     pendingCopyName = ""
+    cursorActive = false
   }
 
   function refresh() {
@@ -71,6 +75,8 @@ Panel {
 
   function copyAt(index) {
     if (index < 0 || index >= accounts.length || copyProcess.running) return
+    cursorActive = true
+    focusSection = "accounts"
     selectedIndex = index
     pendingCopyName = String(accounts[index].name || "OTP")
     errorText = ""
@@ -86,14 +92,46 @@ Panel {
   }
 
   function moveSelection(delta) {
-    if (accounts.length === 0) return
-    selectedIndex = Math.max(0, Math.min(accounts.length - 1, selectedIndex + delta))
+    if (!cursorActive) {
+      cursorActive = true
+      focusSection = accounts.length > 0 ? "accounts" : "header"
+      selectedIndex = 0
+      return
+    }
+
+    if (focusSection === "header") {
+      if (delta > 0 && accounts.length > 0) {
+        focusSection = "accounts"
+        selectedIndex = 0
+      }
+      return
+    }
+
+    if (accounts.length === 0 || selectedIndex + delta < 0) {
+      focusSection = "header"
+      return
+    }
+
+    selectedIndex = Math.min(accounts.length - 1, selectedIndex + delta)
+  }
+
+  function activateSelection() {
+    if (!cursorActive) return
+    if (focusSection === "header") openAccountSetup()
+    else copyAt(selectedIndex)
   }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) refresh()
+  onOpenedChanged: {
+    if (opened) {
+      focusSection = "accounts"
+      selectedIndex = 0
+      cursorActive = false
+      refresh()
+    }
+  }
 
   Process {
     id: otpProcess
@@ -167,7 +205,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveSelection(dy) }
-      onActivateRequested: root.copyAt(root.selectedIndex)
+      onActivateRequested: root.activateSelection()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
@@ -200,6 +238,22 @@ Panel {
                 font.pixelSize: Style.font.display
               }
             }
+            trailingControl: Component {
+              PanelActionButton {
+                iconText: "\uf067"
+                tooltipText: "Add account"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                hasCursor: root.headerHasCursor
+                onHovered: function(on) {
+                  if (on) {
+                    root.cursorActive = true
+                    root.focusSection = "header"
+                  }
+                }
+                onClicked: root.openAccountSetup()
+              }
+            }
           }
 
           Text {
@@ -215,7 +269,7 @@ Panel {
           Text {
             visible: root.errorText === "" && root.accounts.length === 0
             width: parent.width
-            text: "No accounts configured yet.\nRight-click the key icon to add one."
+            text: "No accounts configured yet.\nUse the + button to add one."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -236,14 +290,19 @@ Panel {
                 required property int index
                 width: parent.width
                 implicitHeight: rowLayout.implicitHeight + Style.space(16)
-                hasCursor: root.selectedIndex === index
+                hasCursor: root.cursorActive && root.focusSection === "accounts"
+                  && root.selectedIndex === index
                 foreground: root.foreground
 
                 MouseArea {
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onEntered: root.selectedIndex = accountRow.index
+                  onEntered: {
+                    root.cursorActive = true
+                    root.focusSection = "accounts"
+                    root.selectedIndex = accountRow.index
+                  }
                   onClicked: root.copyAt(accountRow.index)
                 }
 

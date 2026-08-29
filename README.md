@@ -35,7 +35,8 @@ right section of the bar.
 
 - Left-click the key icon to open or close the code list.
 - Click an account or select it with the arrow keys and press Enter to copy.
-- Right-click the key icon to open the account setup in a terminal.
+- Select the `+` button in the popup, or right-click the key icon, to open the
+  account setup in a terminal.
 - Middle-click the icon, or press `R` in the popup, to refresh.
 - Press Escape to close the popup.
 
