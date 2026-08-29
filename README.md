@@ -25,7 +25,7 @@ your accounts and click a code to copy it to the Wayland clipboard.
 Once this repository has been pushed to GitHub, install it with:
 
 ```bash
-omarchy plugin add https://github.com/OWNER/omarchy-otp.git --enable
+omarchy plugin add https://github.com/flathack/omarchy-otp.git --enable
 ```
 
 Omarchy asks where the widget should be placed. The suggested location is the
