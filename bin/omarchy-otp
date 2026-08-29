@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""TOTP store and clipboard helper for the Omarchy OTP bar plugin."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import hashlib
+import hmac
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+CONFIG_DIR = CONFIG_HOME / "omarchy-otp"
+CONFIG_FILE = CONFIG_DIR / "accounts.json"
+SUPPORTED_ALGORITHMS = {"SHA1": hashlib.sha1, "SHA256": hashlib.sha256, "SHA512": hashlib.sha512}
+VERSION = "0.1.0"
+
+
+def ensure_store() -> None:
+    if CONFIG_DIR.is_symlink():
+        raise ValueError(f"Refusing symlinked configuration directory: {CONFIG_DIR}")
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(CONFIG_DIR, 0o700)
+    if CONFIG_FILE.is_symlink():
+        raise ValueError(f"Refusing symlinked account store: {CONFIG_FILE}")
+    if not CONFIG_FILE.exists():
+        descriptor = os.open(CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write("[]\n")
+    os.chmod(CONFIG_FILE, 0o600)
+
+
+def load_accounts() -> list[dict]:
+    ensure_store()
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read configuration: {exc}") from exc
+    if not isinstance(data, list):
+        raise ValueError("accounts.json must contain a JSON list")
+    return data
+
+
+def save_accounts(accounts: list[dict]) -> None:
+    ensure_store()
+    descriptor, temporary_name = tempfile.mkstemp(prefix="accounts.", suffix=".tmp", dir=CONFIG_DIR)
+    temporary = Path(temporary_name)
+    try:
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(accounts, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, CONFIG_FILE)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def normalize_account(account: dict) -> dict:
+    if not isinstance(account, dict):
+        raise ValueError("Each account entry must be a JSON object")
+    name = str(account.get("name", "")).strip()
+    issuer = str(account.get("issuer", "")).strip()
+    secret = "".join(str(account.get("secret", "")).split()).upper().rstrip("=")
+    try:
+        digits = int(account.get("digits", 6))
+        period = int(account.get("period", 30))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid OTP parameters for {name or 'unnamed account'}") from exc
+    algorithm = str(account.get("algorithm", "SHA1")).upper()
+    if not name or not secret:
+        raise ValueError("Each account needs a name and secret")
+    if digits not in (6, 7, 8):
+        raise ValueError(f"Invalid digit count for {name}: {digits}")
+    if period <= 0:
+        raise ValueError(f"Invalid period for {name}: {period}")
+    if algorithm not in SUPPORTED_ALGORITHMS:
+        raise ValueError(f"Unsupported algorithm for {name}: {algorithm}")
+    try:
+        padded = secret + "=" * ((8 - len(secret) % 8) % 8)
+        base64.b32decode(padded, casefold=True)
+    except Exception as exc:
+        raise ValueError(f"Invalid Base32 secret for {name}") from exc
+    return {
+        "name": name,
+        "issuer": issuer,
+        "secret": secret,
+        "digits": digits,
+        "period": period,
+        "algorithm": algorithm,
+    }
+
+
+def totp(account: dict, now: int | None = None) -> tuple[str, int]:
+    account = normalize_account(account)
+    timestamp = int(time.time()) if now is None else now
+    counter = timestamp // account["period"]
+    padded = account["secret"] + "=" * ((8 - len(account["secret"]) % 8) % 8)
+    key = base64.b32decode(padded, casefold=True)
+    digest = hmac.new(key, counter.to_bytes(8, "big"), SUPPORTED_ALGORITHMS[account["algorithm"]]).digest()
+    offset = digest[-1] & 0x0F
+    number = int.from_bytes(digest[offset : offset + 4], "big") & 0x7FFFFFFF
+    code = str(number % (10 ** account["digits"])).zfill(account["digits"])
+    remaining = account["period"] - (timestamp % account["period"])
+    return code, remaining
+
+
+def display_rows(accounts: list[dict]) -> list[dict]:
+    now = int(time.time())
+    rows = []
+    for index, raw in enumerate(accounts):
+        account = normalize_account(raw)
+        code, remaining = totp(account, now)
+        rows.append({
+            "index": index,
+            "name": account["name"],
+            "issuer": account["issuer"],
+            "code": code,
+            "displayCode": f"{code[:3]} {code[3:]}" if len(code) == 6 else code,
+            "remaining": remaining,
+            "period": account["period"],
+            "counter": now // account["period"],
+        })
+    return rows
+
+
+def parse_otpauth(uri: str) -> dict:
+    parsed = urlparse(uri.strip())
+    if parsed.scheme != "otpauth" or parsed.netloc.lower() != "totp":
+        raise ValueError("Expected an otpauth://totp/... URL")
+    values = parse_qs(parsed.query)
+    label = unquote(parsed.path.lstrip("/"))
+    label_issuer, separator, label_name = label.partition(":")
+    issuer = values.get("issuer", [label_issuer if separator else ""])[0]
+    name = label_name if separator else label
+    return normalize_account({
+        "name": name,
+        "issuer": issuer,
+        "secret": values.get("secret", [""])[0],
+        "digits": values.get("digits", [6])[0],
+        "period": values.get("period", [30])[0],
+        "algorithm": values.get("algorithm", ["SHA1"])[0],
+    })
+
+
+def command_list() -> int:
+    print(json.dumps({"accounts": display_rows(load_accounts())}, ensure_ascii=False))
+    return 0
+
+
+def command_copy(index: int, clear_after: int) -> int:
+    accounts = load_accounts()
+    if index < 0 or index >= len(accounts):
+        raise ValueError("Account not found")
+    if shutil.which("wl-copy") is None:
+        raise ValueError("wl-copy is missing; install the wl-clipboard package")
+    if clear_after > 0 and shutil.which("wl-paste") is None:
+        raise ValueError("wl-paste is missing; install the wl-clipboard package")
+    code, _ = totp(accounts[index])
+    subprocess.run(["wl-copy"], input=code, text=True, check=True)
+    if clear_after > 0:
+        worker = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "_clear", str(clear_after)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        if worker.stdin is not None:
+            worker.stdin.write(code)
+            worker.stdin.close()
+    return 0
+
+
+def command_clear(clear_after: int) -> int:
+    code = sys.stdin.read()
+    if not code:
+        return 0
+    time.sleep(max(0, clear_after))
+    current = subprocess.run(
+        ["wl-paste", "--no-newline"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if current.returncode == 0 and current.stdout == code:
+        subprocess.run(["wl-copy", "--clear"], check=False)
+    return 0
+
+
+def command_add() -> int:
+    print("Add an OTP account (the secret input is hidden)")
+    value = getpass.getpass("Secret or otpauth:// URL: ").strip()
+    if value.startswith("otpauth://"):
+        account = parse_otpauth(value)
+        override = input(f"Name [{account['name']}]: ").strip()
+        if override:
+            account["name"] = override
+    else:
+        name = input("Name: ").strip()
+        issuer = input("Issuer (optional): ").strip()
+        account = normalize_account({"name": name, "issuer": issuer, "secret": value})
+    accounts = load_accounts()
+    accounts.append(account)
+    save_accounts(accounts)
+    print(f"Added: {account['name']}")
+    return 0
+
+
+def command_remove(index: int, assume_yes: bool) -> int:
+    accounts = load_accounts()
+    if index < 0 or index >= len(accounts):
+        raise ValueError("Account not found")
+    account = normalize_account(accounts[index])
+    name = account["name"]
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            raise ValueError("Removal requires confirmation; use --yes")
+        answer = input(f"Really remove {name}? [y/N] ").strip().lower()
+        if answer not in ("y", "yes", "j", "ja"):
+            print("Cancelled.")
+            return 0
+    removed = accounts.pop(index)
+    save_accounts(accounts)
+    print(f"Removed: {name}")
+    return 0
+
+
+def command_show() -> int:
+    accounts = load_accounts()
+    if not accounts:
+        print("No OTP accounts configured.")
+        return 0
+    for index, account in enumerate(accounts):
+        normalized = normalize_account(account)
+        suffix = f" ({normalized['issuer']})" if normalized["issuer"] else ""
+        print(f"{index}: {normalized['name']}{suffix}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Manage OTP accounts for the Omarchy bar")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("list", help=argparse.SUPPRESS)
+    sub.add_parser("add", help="add an account interactively")
+    remove = sub.add_parser("remove", help="remove an account")
+    remove.add_argument("index", type=int)
+    remove.add_argument("--yes", action="store_true", help="remove without confirmation")
+    copy = sub.add_parser("copy", help=argparse.SUPPRESS)
+    copy.add_argument("index", type=int)
+    copy.add_argument("--clear-after", type=int, default=30)
+    clear = sub.add_parser("_clear", help=argparse.SUPPRESS)
+    clear.add_argument("seconds", type=int)
+    sub.add_parser("show", help="list configured accounts")
+    args = parser.parse_args()
+    if args.command == "list":
+        return command_list()
+    if args.command == "copy":
+        return command_copy(args.index, max(0, args.clear_after))
+    if args.command == "_clear":
+        return command_clear(args.seconds)
+    if args.command == "add":
+        return command_add()
+    if args.command == "remove":
+        return command_remove(args.index, args.yes)
+    if args.command == "show":
+        return command_show()
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)

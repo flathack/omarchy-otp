@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "steven.otp",
+  "name": "OTP Codes",
+  "version": "0.1.0",
+  "author": "Steven",
+  "license": "MIT",
+  "description": "Generates TOTP codes and copies them to the clipboard.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "OTP Codes",
+    "description": "Click an OTP code to copy it.",
+    "category": "Security",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "clipboardClearSeconds": 30
+    },
+    "schema": [
+      {
+        "key": "clipboardClearSeconds",
+        "type": "integer",
+        "label": "Clear clipboard after (seconds)",
+        "min": 0,
+        "max": 300,
+        "step": 5,
+        "defaultValue": 30,
+        "description": "Clear a copied OTP if the clipboard still contains it. Set to 0 to disable."
+      }
+    ]
+  }
+}
