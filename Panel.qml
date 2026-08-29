@@ -137,36 +137,16 @@ Panel {
   }
 
   function focusFilter() {
-    if (!searchField.visible) return
     searchField.forceActiveFocus()
   }
 
   function resetScroll() {
-    if (accountFlickable) accountFlickable.contentY = 0
-  }
-
-  function ensureCursorVisible(item) {
-    if (!item || !accountFlickable) return
-    var viewport = accountFlickable
-    var contentItem = viewport.contentItem || viewport
-    var point = item.mapToItem(contentItem, 0, 0)
-    var margin = 6
-    var top = point.y
-    var bottom = top + Math.max(item.height || 0, item.implicitHeight || 0)
-    var viewTop = viewport.contentY
-    var viewBottom = viewTop + viewport.height
-    var maxY = Math.max(0, viewport.contentHeight - viewport.height)
-
-    if (top < viewTop + margin)
-      viewport.contentY = Math.max(0, Math.min(maxY, top - margin))
-    else if (bottom > viewBottom - margin)
-      viewport.contentY = Math.max(0, Math.min(maxY, bottom + margin - viewport.height))
+    if (accountList) accountList.positionViewAtBeginning()
   }
 
   function revealSelection() {
-    if (!accountRepeater || !cursorActive || focusSection !== "accounts" || selectedIndex < 0) return
-    var item = accountRepeater.itemAt(selectedIndex)
-    if (item) ensureCursorVisible(item)
+    if (!accountList || !cursorActive || focusSection !== "accounts" || selectedIndex < 0) return
+    accountList.positionViewAtIndex(selectedIndex, ListView.Contain)
   }
 
   implicitWidth: button.implicitWidth
@@ -179,6 +159,7 @@ Panel {
       cursorActive = false
       refresh()
       Qt.callLater(root.resetScroll)
+      Qt.callLater(root.focusFilter)
     }
   }
 
@@ -258,7 +239,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: searchField
     contentWidth: popup.fittedContentWidth(Style.space(360))
     contentHeight: popup.fittedContentHeight(contentColumn.implicitHeight, Style.space(560))
 
@@ -275,24 +256,12 @@ Panel {
         else if (text === "r" || text === "R") root.refresh()
       }
 
-      Flickable {
-        id: accountFlickable
-        anchors.fill: parent
-        contentWidth: width
-        contentHeight: contentColumn.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        flickableDirection: Flickable.VerticalFlick
-        ScrollBar.vertical: ScrollBar {
-          policy: root.filteredAccounts.length > 7 ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
-        }
+      Column {
+        id: contentColumn
+        width: parent.width
+        spacing: Style.space(10)
 
-        Column {
-          id: contentColumn
-          width: parent.width
-          spacing: Style.space(10)
-
-          PanelHero {
+        PanelHero {
             width: parent.width
             title: "OTP Codes"
             meta: root.filterText === ""
@@ -326,11 +295,10 @@ Panel {
                 onClicked: root.openAccountSetup()
               }
             }
-          }
+        }
 
-          TextField {
+        TextField {
             id: searchField
-            visible: root.accounts.length > 7
             width: parent.width
             placeholderText: "Filter accounts…"
             foreground: root.foreground
@@ -342,9 +310,6 @@ Panel {
               root.selectedIndex = 0
               root.cursorActive = root.filteredAccounts.length > 0
               Qt.callLater(root.resetScroll)
-            }
-            onVisibleChanged: {
-              if (visible && root.opened) Qt.callLater(root.focusFilter)
             }
             Keys.onPressed: function(event) {
               if (event.key === Qt.Key_Down) {
@@ -365,11 +330,13 @@ Panel {
                 if (text !== "") text = ""
                 else keyCatcher.forceActiveFocus()
                 event.accepted = true
+              } else {
+                event.accepted = false
               }
             }
-          }
+        }
 
-          Text {
+        Text {
             visible: root.errorText !== ""
             width: parent.width
             text: root.errorText
@@ -377,9 +344,9 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
-          }
+        }
 
-          Text {
+        Text {
             visible: root.errorText === "" && root.accounts.length === 0
             width: parent.width
             text: "No accounts configured yet.\nUse the + button to add one."
@@ -388,9 +355,9 @@ Panel {
             font.pixelSize: Style.font.body
             horizontalAlignment: Text.AlignHCenter
             lineHeight: 1.35
-          }
+        }
 
-          Text {
+        Text {
             visible: root.errorText === "" && root.accounts.length > 0
               && root.filteredAccounts.length === 0
             width: parent.width
@@ -399,28 +366,41 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             horizontalAlignment: Text.AlignHCenter
-          }
+        }
 
-          Column {
+        ListView {
+            id: accountList
             width: parent.width
+            height: Math.min(contentHeight, Style.space(360))
             spacing: Style.space(6)
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
 
-            Repeater {
-              id: accountRepeater
-              model: root.filteredAccounts
+            ScrollBar.vertical: ScrollBar {
+              policy: root.filteredAccounts.length > 7
+                ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+            }
 
-              CursorSurface {
-                id: accountRow
+            model: root.filteredAccounts
+            currentIndex: root.cursorActive && root.focusSection === "accounts"
+              ? root.selectedIndex : -1
+            onCurrentIndexChanged: if (currentIndex >= 0) Qt.callLater(keepCurrentVisible)
+
+            function keepCurrentVisible() {
+              if (currentIndex >= 0)
+                positionViewAtIndex(currentIndex, ListView.Contain)
+            }
+
+          delegate: CursorSurface {
+              id: accountRow
                 required property var modelData
                 required property int index
-                width: parent.width
-                implicitHeight: rowLayout.implicitHeight + Style.space(16)
+                width: ListView.view.width
+                height: rowLayout.implicitHeight + Style.space(16)
                 hasCursor: root.cursorActive && root.focusSection === "accounts"
                   && root.selectedIndex === index
                 foreground: root.foreground
-                onHasCursorChanged: {
-                  if (hasCursor) Qt.callLater(root.revealSelection)
-                }
 
                 MouseArea {
                   anchors.fill: parent
@@ -488,21 +468,17 @@ Panel {
                     Layout.alignment: Qt.AlignVCenter
                   }
                 }
-              }
             }
-          }
+        }
 
-          Text {
+        Text {
             visible: root.accounts.length > 0
             width: parent.width
-            text: root.accounts.length > 7
-              ? "Type to filter  ·  Enter to copy  ·  R to refresh"
-              : "Click or press Enter to copy  ·  R to refresh"
+            text: "Type to filter  ·  Enter to copy  ·  R to refresh"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
-          }
         }
       }
     }
