@@ -23,7 +23,11 @@ CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 CONFIG_DIR = CONFIG_HOME / "omarchy-otp"
 CONFIG_FILE = CONFIG_DIR / "accounts.json"
 SUPPORTED_ALGORITHMS = {"SHA1": hashlib.sha1, "SHA256": hashlib.sha256, "SHA512": hashlib.sha512}
-VERSION = "0.2.1"
+VERSION = "0.3.0"
+ENCRYPTED_FORMAT = "omarchy-otp-encrypted"
+ENCRYPTED_VERSION = 1
+ENCRYPTION_AAD = b"omarchy-otp/accounts/v1"
+KEYRING_ATTRIBUTES = ["application", "omarchy-otp", "purpose", "account-store"]
 
 
 def ensure_store() -> None:
@@ -40,31 +44,166 @@ def ensure_store() -> None:
     os.chmod(CONFIG_FILE, 0o600)
 
 
-def load_accounts() -> list[dict]:
-    ensure_store()
+def read_json_file(path: Path) -> object:
     try:
-        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read configuration: {exc}") from exc
+
+
+def encrypted_document(data: object) -> bool:
+    return isinstance(data, dict) and data.get("format") == ENCRYPTED_FORMAT
+
+
+def encryption_backend():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.exceptions import InvalidTag
+    except ImportError as exc:
+        raise ValueError(
+            "Encrypted storage requires the python-cryptography package"
+        ) from exc
+    return AESGCM, InvalidTag
+
+
+def store_key(create: bool = False) -> bytes:
+    if shutil.which("secret-tool") is None:
+        raise ValueError("Encrypted storage requires secret-tool from libsecret")
+    result = subprocess.run(
+        ["secret-tool", "lookup", *KEYRING_ATTRIBUTES],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    encoded = result.stdout.strip() if result.returncode == 0 else ""
+    if not encoded and create:
+        key = os.urandom(32)
+        encoded = base64.b64encode(key).decode("ascii")
+        stored = subprocess.run(
+            [
+                "secret-tool", "store", "--label=Omarchy OTP account store",
+                *KEYRING_ATTRIBUTES,
+            ],
+            input=encoded,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if stored.returncode != 0:
+            raise ValueError("Could not store the encryption key in GNOME Keyring")
+        return key
+    if not encoded:
+        raise ValueError("Encrypted account store is locked or its key is unavailable")
+    try:
+        key = base64.b64decode(encoded, validate=True)
+    except ValueError as exc:
+        raise ValueError("The account-store key in GNOME Keyring is invalid") from exc
+    if len(key) != 32:
+        raise ValueError("The account-store key in GNOME Keyring has an invalid length")
+    return key
+
+
+def encrypt_accounts(accounts: list[dict], key: bytes) -> dict:
+    AESGCM, _ = encryption_backend()
+    nonce = os.urandom(12)
+    plaintext = json.dumps(accounts, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, ENCRYPTION_AAD)
+    return {
+        "format": ENCRYPTED_FORMAT,
+        "version": ENCRYPTED_VERSION,
+        "algorithm": "AES-256-GCM",
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+
+
+def decrypt_accounts(document: dict, key: bytes) -> list[dict]:
+    if document.get("version") != ENCRYPTED_VERSION or document.get("algorithm") != "AES-256-GCM":
+        raise ValueError("Unsupported encrypted account-store format")
+    try:
+        nonce = base64.b64decode(str(document["nonce"]), validate=True)
+        ciphertext = base64.b64decode(str(document["ciphertext"]), validate=True)
+    except (KeyError, ValueError) as exc:
+        raise ValueError("Encrypted account store is malformed") from exc
+    if len(nonce) != 12:
+        raise ValueError("Encrypted account store has an invalid nonce")
+    AESGCM, InvalidTag = encryption_backend()
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, ENCRYPTION_AAD)
+        accounts = json.loads(plaintext.decode("utf-8"))
+    except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Encrypted account store failed authentication") from exc
+    if not isinstance(accounts, list):
+        raise ValueError("Decrypted account store must contain a JSON list")
+    return accounts
+
+
+def load_accounts() -> list[dict]:
+    ensure_store()
+    data = read_json_file(CONFIG_FILE)
+    if encrypted_document(data):
+        return decrypt_accounts(data, store_key())
     if not isinstance(data, list):
-        raise ValueError("accounts.json must contain a JSON list")
+        raise ValueError("accounts.json must contain a JSON list or encrypted store")
     return data
 
 
-def save_accounts(accounts: list[dict]) -> None:
-    ensure_store()
-    descriptor, temporary_name = tempfile.mkstemp(prefix="accounts.", suffix=".tmp", dir=CONFIG_DIR)
+def write_json_file(path: Path, data: object) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
         os.chmod(temporary, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(accounts, handle, indent=2, ensure_ascii=False)
+            json.dump(data, handle, indent=2, ensure_ascii=False)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, CONFIG_FILE)
+        os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def save_accounts(accounts: list[dict]) -> None:
+    ensure_store()
+    current = read_json_file(CONFIG_FILE)
+    data = encrypt_accounts(accounts, store_key()) if encrypted_document(current) else accounts
+    write_json_file(CONFIG_FILE, data)
+
+
+def convert_store_files(encrypt: bool, include_backups: bool = True) -> tuple[int, int]:
+    ensure_store()
+    targets = [CONFIG_FILE]
+    if include_backups:
+        targets.extend(sorted(CONFIG_DIR.glob("accounts.json.backup-*")))
+    documents: list[tuple[Path, object]] = []
+    for path in targets:
+        if path.is_symlink():
+            raise ValueError(f"Refusing symlinked account store: {path}")
+        documents.append((path, read_json_file(path)))
+    has_encrypted_file = any(encrypted_document(data) for _, data in documents)
+    key = store_key(create=encrypt and not has_encrypted_file)
+    converted: list[tuple[Path, object]] = []
+    unchanged = 0
+    for path, data in documents:
+        if encrypt:
+            if encrypted_document(data):
+                decrypt_accounts(data, key)
+                unchanged += 1
+                continue
+            if not isinstance(data, list):
+                raise ValueError(f"Unexpected account-store format: {path.name}")
+            envelope = encrypt_accounts(data, key)
+            if decrypt_accounts(envelope, key) != data:
+                raise ValueError(f"Encryption self-check failed: {path.name}")
+            converted.append((path, envelope))
+        else:
+            if not encrypted_document(data):
+                unchanged += 1
+                continue
+            converted.append((path, decrypt_accounts(data, key)))
+    for path, data in converted:
+        write_json_file(path, data)
+    return len(converted), unchanged
 
 
 def backup_accounts() -> Path:
@@ -372,6 +511,30 @@ def command_show() -> int:
     return 0
 
 
+def command_encrypt_store() -> int:
+    converted, unchanged = convert_store_files(encrypt=True)
+    print(f"Encrypted {converted} account-store file(s) with AES-256-GCM.")
+    if unchanged:
+        print(f"Already encrypted: {unchanged} file(s).")
+    print("The encryption key is stored in GNOME Keyring.")
+    return 0
+
+
+def command_decrypt_store(assume_yes: bool) -> int:
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            raise ValueError("Decryption requires confirmation; use --yes")
+        answer = input("Write the account store and backups as plaintext? [y/N] ").strip().lower()
+        if answer not in ("y", "yes", "j", "ja"):
+            print("Cancelled.")
+            return 0
+    converted, unchanged = convert_store_files(encrypt=False)
+    print(f"Decrypted {converted} account-store file(s) to plaintext.")
+    if unchanged:
+        print(f"Already plaintext: {unchanged} file(s).")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage OTP accounts for the Omarchy bar")
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
@@ -379,6 +542,9 @@ def main() -> int:
     sub.add_parser("list", help=argparse.SUPPRESS)
     sub.add_parser("add", help="add an account interactively")
     sub.add_parser("import-bitwarden", help="import TOTP accounts from Bitwarden/Vaultwarden")
+    sub.add_parser("encrypt-store", help="encrypt the account store and backups with GNOME Keyring")
+    decrypt = sub.add_parser("decrypt-store", help="decrypt the account store and backups to plaintext")
+    decrypt.add_argument("--yes", action="store_true", help="decrypt without confirmation")
     remove = sub.add_parser("remove", help="remove an account")
     remove.add_argument("index", type=int)
     remove.add_argument("--yes", action="store_true", help="remove without confirmation")
@@ -399,6 +565,10 @@ def main() -> int:
         return command_add()
     if args.command == "import-bitwarden":
         return command_import_bitwarden()
+    if args.command == "encrypt-store":
+        return command_encrypt_store()
+    if args.command == "decrypt-store":
+        return command_decrypt_store(args.yes)
     if args.command == "remove":
         return command_remove(args.index, args.yes)
     if args.command == "show":

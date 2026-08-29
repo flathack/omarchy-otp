@@ -11,16 +11,18 @@ your accounts and click a code to copy it to the Wayland clipboard.
 - Manual Base32 secrets and `otpauth://totp/...` URLs
 - Mouse and keyboard navigation
 - Automatic clipboard clearing without overwriting newer clipboard content
-- No network access or third-party Python packages
+- No network access during normal OTP generation
 - Account storage restricted to the current user
 - Direct TOTP import from Bitwarden and Vaultwarden
 - Instant account filtering by name or issuer for larger lists
+- Optional AES-256-GCM encryption backed by GNOME Keyring
 
 ## Requirements
 
 - A current Omarchy installation with the plugin-based shell
 - Python 3.10 or newer
 - `wl-copy` and `wl-paste` from `wl-clipboard`
+- For encrypted storage: `python-cryptography` and `secret-tool` from `libsecret`
 
 ## Install
 
@@ -77,9 +79,22 @@ Accounts are stored outside the repository in:
 ${XDG_CONFIG_HOME:-~/.config}/omarchy-otp/accounts.json
 ```
 
-The directory is set to mode `0700` and the file to `0600`. The file contains
-unencrypted TOTP secrets; anyone with access to your user account can read
-them. Do not commit or share this file.
+The directory is set to mode `0700` and the file to `0600`. Plaintext storage
+remains available for minimal installations. To encrypt the active store and
+all existing plugin-created backups with AES-256-GCM, run:
+
+```bash
+OTP_CLI="$HOME/.config/omarchy/plugins/steven.otp/bin/omarchy-otp"
+"$OTP_CLI" encrypt-store
+```
+
+The randomly generated 256-bit key is stored in GNOME Keyring, not beside the
+account file. Future changes and backups preserve the encrypted format. The
+keyring normally unlocks with the desktop login. Losing the keyring entry makes
+the encrypted account files unrecoverable.
+
+To deliberately return the store and backups to plaintext, run
+`"$OTP_CLI" decrypt-store` and confirm the warning.
 
 Copied codes are cleared after 30 seconds by default. The clipboard is only
 cleared if it still contains the code, so newer clipboard content is preserved.
@@ -118,7 +133,8 @@ clipboard threat model.
 ## Limitations
 
 - TOTP is supported; counter-based HOTP is not.
-- Secrets are protected by filesystem permissions, not encryption at rest.
+- Keyring encryption protects files at rest, not against processes running as
+  the same user after the desktop keyring has been unlocked.
 
 ## License
 

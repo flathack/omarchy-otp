@@ -14,12 +14,20 @@ The optional Bitwarden/Vaultwarden importer reads decrypted items directly
 from the official `bw` CLI into memory. It does not create a vault export on
 disk, passes the session through the child-process environment instead of the
 command line, and clears that environment after the import. The account-store
-backup created before an import is restricted to mode `0600` and contains the
-same unencrypted TOTP secrets as the active store.
+backup created before an import is restricted to mode `0600` and preserves the
+active store's encrypted or plaintext format.
 
-Secrets are not encrypted at rest. A process running as the same user, malware,
-or an attacker with access to the unlocked account can read them. Use a
-hardware-backed authenticator if that threat is in scope.
+Encrypted storage uses AES-256-GCM with a fresh 96-bit nonce for every write and
+authenticated format metadata. Its random 256-bit key is stored in GNOME
+Keyring through Secret Service. The key is never placed in the account file or
+on a child-process command line. Migration performs an in-memory decrypt
+self-check before atomically replacing each plaintext file.
+
+This protects account files and their backups at rest. Once the desktop keyring
+is unlocked, a process running as the same user may be able to request the key;
+it does not protect a compromised logged-in session. Losing the keyring entry
+makes the encrypted files unrecoverable. Use a hardware-backed authenticator if
+either threat is in scope.
 
 ## Clipboard behavior
 

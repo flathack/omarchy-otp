@@ -167,6 +167,69 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(os.stat(OTP.CONFIG_DIR).st_mode & 0o777, 0o700)
         self.assertEqual(os.stat(OTP.CONFIG_FILE).st_mode & 0o777, 0o600)
 
+    def test_encrypted_store_round_trip_and_authentication(self) -> None:
+        account = OTP.normalize_account(
+            {"name": "Encrypted", "secret": "JBSWY3DPEHPK3PXP"}
+        )
+        OTP.save_accounts([account])
+        backup = OTP.CONFIG_DIR / "accounts.json.backup-test"
+        backup.write_text(json.dumps([account]), encoding="utf-8")
+        os.chmod(backup, 0o600)
+        key = b"k" * 32
+
+        with mock.patch.object(OTP, "store_key", return_value=key):
+            converted, unchanged = OTP.convert_store_files(encrypt=True)
+            self.assertEqual((converted, unchanged), (2, 0))
+            serialized = OTP.CONFIG_FILE.read_text(encoding="utf-8")
+            self.assertNotIn(account["secret"], serialized)
+            self.assertEqual(OTP.load_accounts(), [account])
+
+            account2 = OTP.normalize_account(
+                {"name": "Second", "secret": "KRUGS4ZANFZSAYJA"}
+            )
+            OTP.save_accounts([account, account2])
+            self.assertEqual(OTP.load_accounts(), [account, account2])
+
+            document = json.loads(OTP.CONFIG_FILE.read_text(encoding="utf-8"))
+            ciphertext = bytearray(base64.b64decode(document["ciphertext"]))
+            ciphertext[-1] ^= 1
+            document["ciphertext"] = base64.b64encode(ciphertext).decode()
+            OTP.write_json_file(OTP.CONFIG_FILE, document)
+            with self.assertRaisesRegex(ValueError, "failed authentication"):
+                OTP.load_accounts()
+
+    def test_encrypted_store_can_be_decrypted(self) -> None:
+        account = OTP.normalize_account(
+            {"name": "Example", "secret": "JBSWY3DPEHPK3PXP"}
+        )
+        OTP.save_accounts([account])
+        key = b"k" * 32
+
+        with mock.patch.object(OTP, "store_key", return_value=key):
+            OTP.convert_store_files(encrypt=True, include_backups=False)
+            converted, unchanged = OTP.convert_store_files(
+                encrypt=False, include_backups=False
+            )
+
+        self.assertEqual((converted, unchanged), (1, 0))
+        self.assertEqual(json.loads(OTP.CONFIG_FILE.read_text()), [account])
+
+    def test_existing_encrypted_store_never_creates_a_replacement_key(self) -> None:
+        account = OTP.normalize_account(
+            {"name": "Example", "secret": "JBSWY3DPEHPK3PXP"}
+        )
+        OTP.ensure_store()
+        key = b"k" * 32
+        OTP.write_json_file(OTP.CONFIG_FILE, OTP.encrypt_accounts([account], key))
+
+        with mock.patch.object(OTP, "store_key", return_value=key) as get_key:
+            converted, unchanged = OTP.convert_store_files(
+                encrypt=True, include_backups=False
+            )
+
+        self.assertEqual((converted, unchanged), (0, 1))
+        get_key.assert_called_once_with(create=False)
+
     def test_rejects_symlinked_store(self) -> None:
         OTP.CONFIG_DIR.mkdir(mode=0o700, parents=True)
         target = OTP.CONFIG_DIR / "real.json"
