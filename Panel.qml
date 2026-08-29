@@ -150,7 +150,7 @@ Panel {
       index: Number(account.index),
       name: String(account.name || "OTP account")
     }
-    deleteConfirm.selectedIndex = 0
+    deleteConfirm.selectedIndex = 1
     deleteConfirmOpen = true
     Qt.callLater(root.focusFilter)
   }
@@ -158,7 +158,7 @@ Panel {
   function cancelDelete() {
     deleteConfirmOpen = false
     deleteTarget = null
-    deleteConfirm.selectedIndex = 0
+    deleteConfirm.selectedIndex = 1
     Qt.callLater(root.focusFilter)
   }
 
