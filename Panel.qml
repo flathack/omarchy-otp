@@ -150,17 +150,23 @@ Panel {
     var viewport = accountFlickable
     var contentItem = viewport.contentItem || viewport
     var point = item.mapToItem(contentItem, 0, 0)
-    var margin = Style.space(6)
+    var margin = 6
     var top = point.y
-    var bottom = top + item.height
+    var bottom = top + Math.max(item.height || 0, item.implicitHeight || 0)
     var viewTop = viewport.contentY
     var viewBottom = viewTop + viewport.height
     var maxY = Math.max(0, viewport.contentHeight - viewport.height)
 
-    if (top - margin < viewTop)
-      viewport.contentY = Math.max(0, top - margin)
-    else if (bottom + margin > viewBottom)
-      viewport.contentY = Math.min(maxY, bottom + margin - viewport.height)
+    if (top < viewTop + margin)
+      viewport.contentY = Math.max(0, Math.min(maxY, top - margin))
+    else if (bottom > viewBottom - margin)
+      viewport.contentY = Math.max(0, Math.min(maxY, bottom + margin - viewport.height))
+  }
+
+  function revealSelection() {
+    if (!accountRepeater || !cursorActive || focusSection !== "accounts" || selectedIndex < 0) return
+    var item = accountRepeater.itemAt(selectedIndex)
+    if (item) ensureCursorVisible(item)
   }
 
   implicitWidth: button.implicitWidth
@@ -179,6 +185,13 @@ Panel {
   onFilteredAccountsChanged: {
     selectedIndex = Math.max(0, Math.min(selectedIndex, filteredAccounts.length - 1))
     if (filteredAccounts.length === 0 && focusSection === "accounts") cursorActive = false
+    else Qt.callLater(root.revealSelection)
+  }
+
+  onSelectedIndexChanged: Qt.callLater(root.revealSelection)
+  onFocusSectionChanged: {
+    if (focusSection === "header") Qt.callLater(root.resetScroll)
+    else Qt.callLater(root.revealSelection)
   }
 
   Process {
@@ -393,6 +406,7 @@ Panel {
             spacing: Style.space(6)
 
             Repeater {
+              id: accountRepeater
               model: root.filteredAccounts
 
               CursorSurface {
@@ -404,7 +418,9 @@ Panel {
                 hasCursor: root.cursorActive && root.focusSection === "accounts"
                   && root.selectedIndex === index
                 foreground: root.foreground
-                onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(accountRow)
+                onHasCursorChanged: {
+                  if (hasCursor) Qt.callLater(root.revealSelection)
+                }
 
                 MouseArea {
                   anchors.fill: parent
