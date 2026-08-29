@@ -23,7 +23,7 @@ CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 CONFIG_DIR = CONFIG_HOME / "omarchy-otp"
 CONFIG_FILE = CONFIG_DIR / "accounts.json"
 SUPPORTED_ALGORITHMS = {"SHA1": hashlib.sha1, "SHA256": hashlib.sha256, "SHA512": hashlib.sha512}
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 
 def ensure_store() -> None:

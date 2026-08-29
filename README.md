@@ -14,6 +14,7 @@ your accounts and click a code to copy it to the Wayland clipboard.
 - No network access or third-party Python packages
 - Account storage restricted to the current user
 - Direct TOTP import from Bitwarden and Vaultwarden
+- Instant account filtering by name or issuer for larger lists
 
 ## Requirements
 
@@ -40,6 +41,8 @@ right section of the bar.
   account setup in a terminal.
 - Middle-click the icon, or press `R` in the popup, to refresh.
 - Press Escape to close the popup.
+- With more than seven accounts, start typing in the focused filter field to
+  narrow the list by account name or issuer. Escape clears the filter.
 
 The CLI is bundled with the plugin. After installation, it can also be called
 directly:

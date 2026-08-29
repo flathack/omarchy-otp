@@ -16,6 +16,7 @@ Panel {
   property int selectedIndex: 0
   property string focusSection: "accounts"
   property bool cursorActive: false
+  property string filterText: ""
   property string copiedName: ""
   property string pendingCopyName: ""
   property int tickEpoch: Math.floor(Date.now() / 1000)
@@ -27,6 +28,18 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool headerHasCursor: cursorActive && focusSection === "header"
+  readonly property var filteredAccounts: {
+    var query = filterText.trim().toLowerCase()
+    var result = []
+    for (var index = 0; index < accounts.length; index++) {
+      var account = accounts[index]
+      var haystack = (String(account.name || "") + " "
+        + String(account.issuer || "")).toLowerCase()
+      if (query === "" || haystack.indexOf(query) !== -1)
+        result.push({ account: account })
+    }
+    return result
+  }
 
   function open() {
     tickEpoch = Math.floor(Date.now() / 1000)
@@ -41,6 +54,7 @@ Panel {
     errorText = ""
     pendingCopyName = ""
     cursorActive = false
+    filterText = ""
   }
 
   function refresh() {
@@ -52,7 +66,7 @@ Panel {
     try {
       var parsed = JSON.parse(String(raw || "{}"))
       accounts = Array.isArray(parsed.accounts) ? parsed.accounts : []
-      selectedIndex = Math.max(0, Math.min(selectedIndex, accounts.length - 1))
+      selectedIndex = Math.max(0, Math.min(selectedIndex, filteredAccounts.length - 1))
       errorText = ""
     } catch (error) {
       errorText = "Could not read OTP data."
@@ -74,13 +88,14 @@ Panel {
   }
 
   function copyAt(index) {
-    if (index < 0 || index >= accounts.length || copyProcess.running) return
+    if (index < 0 || index >= filteredAccounts.length || copyProcess.running) return
+    var entry = filteredAccounts[index]
     cursorActive = true
     focusSection = "accounts"
     selectedIndex = index
-    pendingCopyName = String(accounts[index].name || "OTP")
+    pendingCopyName = String(entry.account.name || "OTP")
     errorText = ""
-    copyProcess.command = [helperPath, "copy", String(accounts[index].index),
+    copyProcess.command = [helperPath, "copy", String(entry.account.index),
       "--clear-after", String(Math.max(0, Number(setting("clipboardClearSeconds", 30)) || 0))]
     copyProcess.running = true
   }
@@ -94,31 +109,36 @@ Panel {
   function moveSelection(delta) {
     if (!cursorActive) {
       cursorActive = true
-      focusSection = accounts.length > 0 ? "accounts" : "header"
+      focusSection = filteredAccounts.length > 0 ? "accounts" : "header"
       selectedIndex = 0
       return
     }
 
     if (focusSection === "header") {
-      if (delta > 0 && accounts.length > 0) {
+      if (delta > 0 && filteredAccounts.length > 0) {
         focusSection = "accounts"
         selectedIndex = 0
       }
       return
     }
 
-    if (accounts.length === 0 || selectedIndex + delta < 0) {
+    if (filteredAccounts.length === 0 || selectedIndex + delta < 0) {
       focusSection = "header"
       return
     }
 
-    selectedIndex = Math.min(accounts.length - 1, selectedIndex + delta)
+    selectedIndex = Math.min(filteredAccounts.length - 1, selectedIndex + delta)
   }
 
   function activateSelection() {
     if (!cursorActive) return
     if (focusSection === "header") openAccountSetup()
     else copyAt(selectedIndex)
+  }
+
+  function focusFilter() {
+    if (!searchField.visible) return
+    searchField.forceActiveFocus()
   }
 
   function resetScroll() {
@@ -154,6 +174,11 @@ Panel {
       refresh()
       Qt.callLater(root.resetScroll)
     }
+  }
+
+  onFilteredAccountsChanged: {
+    selectedIndex = Math.max(0, Math.min(selectedIndex, filteredAccounts.length - 1))
+    if (filteredAccounts.length === 0 && focusSection === "accounts") cursorActive = false
   }
 
   Process {
@@ -227,11 +252,15 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: searchField.activeFocus
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveSelection(dy) }
       onActivateRequested: root.activateSelection()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
+      onTextKey: function(text) {
+        if (text === "/") root.focusFilter()
+        else if (text === "r" || text === "R") root.refresh()
+      }
 
       Flickable {
         id: accountFlickable
@@ -242,7 +271,7 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         ScrollBar.vertical: ScrollBar {
-          policy: root.accounts.length > 7 ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+          policy: root.filteredAccounts.length > 7 ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
         }
 
         Column {
@@ -253,7 +282,9 @@ Panel {
           PanelHero {
             width: parent.width
             title: "OTP Codes"
-            meta: root.accounts.length === 1 ? "1 account" : root.accounts.length + " accounts"
+            meta: root.filterText === ""
+              ? (root.accounts.length === 1 ? "1 account" : root.accounts.length + " accounts")
+              : root.filteredAccounts.length + " of " + root.accounts.length + " accounts"
             detail: root.copiedName === "" ? "" : "COPIED"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -284,6 +315,47 @@ Panel {
             }
           }
 
+          TextField {
+            id: searchField
+            visible: root.accounts.length > 7
+            width: parent.width
+            placeholderText: "Filter accounts…"
+            foreground: root.foreground
+            font.family: root.fontFamily
+            text: root.filterText
+            onTextChanged: {
+              root.filterText = text
+              root.focusSection = "accounts"
+              root.selectedIndex = 0
+              root.cursorActive = root.filteredAccounts.length > 0
+              Qt.callLater(root.resetScroll)
+            }
+            onVisibleChanged: {
+              if (visible && root.opened) Qt.callLater(root.focusFilter)
+            }
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Down) {
+                root.moveSelection(1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Up) {
+                root.moveSelection(-1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (!root.cursorActive && root.filteredAccounts.length > 0) {
+                  root.cursorActive = true
+                  root.focusSection = "accounts"
+                  root.selectedIndex = 0
+                }
+                root.activateSelection()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Escape) {
+                if (text !== "") text = ""
+                else keyCatcher.forceActiveFocus()
+                event.accepted = true
+              }
+            }
+          }
+
           Text {
             visible: root.errorText !== ""
             width: parent.width
@@ -305,12 +377,23 @@ Panel {
             lineHeight: 1.35
           }
 
+          Text {
+            visible: root.errorText === "" && root.accounts.length > 0
+              && root.filteredAccounts.length === 0
+            width: parent.width
+            text: "No matching accounts."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            horizontalAlignment: Text.AlignHCenter
+          }
+
           Column {
             width: parent.width
             spacing: Style.space(6)
 
             Repeater {
-              model: root.accounts
+              model: root.filteredAccounts
 
               CursorSurface {
                 id: accountRow
@@ -350,7 +433,7 @@ Panel {
 
                     Text {
                       Layout.fillWidth: true
-                      text: accountRow.modelData.name
+                      text: accountRow.modelData.account.name
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
@@ -361,7 +444,7 @@ Panel {
                     Text {
                       Layout.fillWidth: true
                       visible: text !== ""
-                      text: accountRow.modelData.issuer || ""
+                      text: accountRow.modelData.account.issuer || ""
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
@@ -370,7 +453,7 @@ Panel {
                   }
 
                   Text {
-                    text: accountRow.modelData.displayCode
+                    text: accountRow.modelData.account.displayCode
                     color: root.foreground
                     font.family: "monospace"
                     font.pixelSize: Style.font.heading
@@ -380,8 +463,8 @@ Panel {
                   }
 
                   Text {
-                    text: root.remainingFor(accountRow.modelData) + "s"
-                    color: root.remainingFor(accountRow.modelData) <= 5 ? Color.urgent : root.dim
+                    text: root.remainingFor(accountRow.modelData.account) + "s"
+                    color: root.remainingFor(accountRow.modelData.account) <= 5 ? Color.urgent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     horizontalAlignment: Text.AlignRight
@@ -396,7 +479,9 @@ Panel {
           Text {
             visible: root.accounts.length > 0
             width: parent.width
-            text: "Click or press Enter to copy  ·  R to refresh"
+            text: root.accounts.length > 7
+              ? "Type to filter  ·  Enter to copy  ·  R to refresh"
+              : "Click or press Enter to copy  ·  R to refresh"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
