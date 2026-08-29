@@ -230,6 +230,28 @@ class StoreTests(unittest.TestCase):
         self.assertEqual((converted, unchanged), (0, 1))
         get_key.assert_called_once_with(create=False)
 
+    def test_remove_updates_encrypted_store(self) -> None:
+        first = OTP.normalize_account(
+            {"name": "First", "secret": "JBSWY3DPEHPK3PXP"}
+        )
+        second = OTP.normalize_account(
+            {"name": "Second", "secret": "KRUGS4ZANFZSAYJA"}
+        )
+        OTP.save_accounts([first, second])
+        key = b"k" * 32
+
+        with (
+            mock.patch.object(OTP, "store_key", return_value=key),
+            mock.patch.object(sys, "stdout", new_callable=StringIO),
+        ):
+            OTP.convert_store_files(encrypt=True, include_backups=False)
+            self.assertEqual(OTP.command_remove(0, assume_yes=True), 0)
+            self.assertEqual(OTP.load_accounts(), [second])
+
+        serialized = OTP.CONFIG_FILE.read_text(encoding="utf-8")
+        self.assertNotIn(first["secret"], serialized)
+        self.assertNotIn(second["secret"], serialized)
+
     def test_rejects_symlinked_store(self) -> None:
         OTP.CONFIG_DIR.mkdir(mode=0o700, parents=True)
         target = OTP.CONFIG_DIR / "real.json"

@@ -19,6 +19,8 @@ Panel {
   property string filterText: ""
   property string copiedName: ""
   property string pendingCopyName: ""
+  property bool deleteConfirmOpen: false
+  property var deleteTarget: null
   property int tickEpoch: Math.floor(Date.now() / 1000)
 
   readonly property url helperUrl: Qt.resolvedUrl("bin/omarchy-otp")
@@ -53,6 +55,8 @@ Panel {
     accounts = []
     errorText = ""
     pendingCopyName = ""
+    deleteConfirmOpen = false
+    deleteTarget = null
     cursorActive = false
     filterText = ""
   }
@@ -136,6 +140,39 @@ Panel {
     else copyAt(selectedIndex)
   }
 
+  function requestDeleteSelected() {
+    if (!cursorActive || focusSection !== "accounts"
+        || selectedIndex < 0 || selectedIndex >= filteredAccounts.length
+        || removeProcess.running) return
+
+    var account = filteredAccounts[selectedIndex].account
+    deleteTarget = {
+      index: Number(account.index),
+      name: String(account.name || "OTP account")
+    }
+    deleteConfirm.selectedIndex = 0
+    deleteConfirmOpen = true
+    Qt.callLater(root.focusFilter)
+  }
+
+  function cancelDelete() {
+    deleteConfirmOpen = false
+    deleteTarget = null
+    deleteConfirm.selectedIndex = 0
+    Qt.callLater(root.focusFilter)
+  }
+
+  function confirmDelete() {
+    var target = deleteTarget
+    deleteConfirmOpen = false
+    deleteTarget = null
+    if (!target || removeProcess.running) return
+
+    errorText = ""
+    removeProcess.command = [helperPath, "remove", String(target.index), "--yes"]
+    removeProcess.running = true
+  }
+
   function focusFilter() {
     searchField.forceActiveFocus()
   }
@@ -203,6 +240,17 @@ Panel {
     stderr: StdioCollector { id: copyStderr; waitForEnd: true }
   }
 
+  Process {
+    id: removeProcess
+    onExited: function(exitCode) {
+      var failure = String(removeStderr.text || "").trim()
+      if (exitCode === 0) root.refresh()
+      else root.errorText = failure || "Could not delete the account."
+      Qt.callLater(root.focusFilter)
+    }
+    stderr: StdioCollector { id: removeStderr; waitForEnd: true }
+  }
+
   Timer {
     interval: 1000
     running: root.opened
@@ -249,6 +297,7 @@ Panel {
       blocked: searchField.activeFocus
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveSelection(dy) }
       onActivateRequested: root.activateSelection()
+      onDeleteRequested: root.requestDeleteSelected()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
@@ -312,7 +361,13 @@ Panel {
               Qt.callLater(root.resetScroll)
             }
             Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Down) {
+              if (root.deleteConfirmOpen) {
+                deleteConfirm.handleKey(event)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Delete) {
+                root.requestDeleteSelected()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Down) {
                 root.moveSelection(1)
                 event.accepted = true
               } else if (event.key === Qt.Key_Up) {
@@ -474,12 +529,27 @@ Panel {
         Text {
             visible: root.accounts.length > 0
             width: parent.width
-            text: "Type to filter  ·  Enter to copy  ·  R to refresh"
+            text: "Type to filter  ·  Enter to copy  ·  Delete to remove"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
         }
+      }
+
+      ConfirmDialog {
+        id: deleteConfirm
+        anchors.fill: parent
+        z: 20
+        opened: root.deleteConfirmOpen
+        message: "Delete " + ((root.deleteTarget && root.deleteTarget.name) || "this account")
+          + "? This cannot be undone."
+        cancelText: "Cancel"
+        confirmText: "Delete"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onCanceled: root.cancelDelete()
+        onConfirmed: root.confirmDelete()
       }
     }
   }
