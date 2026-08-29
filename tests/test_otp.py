@@ -65,6 +65,34 @@ class TotpTests(unittest.TestCase):
         self.assertEqual(account["period"], 60)
         self.assertEqual(account["algorithm"], "SHA256")
 
+    def test_merges_bitwarden_totp_items_without_duplicates(self) -> None:
+        existing = [
+            OTP.normalize_account({"name": "Existing", "secret": "JBSWY3DPEHPK3PXP"})
+        ]
+        items = [
+            {"name": "Duplicate", "login": {"totp": "JBSWY3DPEHPK3PXP"}},
+            {
+                "name": "Work login",
+                "login": {
+                    "totp": "otpauth://totp/Example:old-name"
+                    "?secret=KRUGS4ZANFZSAYJA&issuer=Example&digits=8&period=60"
+                },
+            },
+            {"name": "No OTP", "login": {"username": "user@example.com"}},
+            {"name": "Broken", "login": {"totp": "not-base32!"}},
+        ]
+
+        merged, imported, duplicates, invalid = OTP.merge_bitwarden_accounts(existing, items)
+
+        self.assertEqual(imported, 1)
+        self.assertEqual(duplicates, 1)
+        self.assertEqual(invalid, 1)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[1]["name"], "Work login")
+        self.assertEqual(merged[1]["issuer"], "Example")
+        self.assertEqual(merged[1]["digits"], 8)
+        self.assertEqual(merged[1]["period"], 60)
+
     def test_rejects_malformed_accounts_cleanly(self) -> None:
         for value in (None, [], "secret"):
             with self.subTest(value=value):

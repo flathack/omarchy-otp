@@ -10,6 +10,13 @@ The configuration directory is forced to mode `0700` and the account file to
 `0600`. Symlinks at either location are rejected. Updates use an atomic
 same-directory replacement with a uniquely named temporary file.
 
+The optional Bitwarden/Vaultwarden importer reads decrypted items directly
+from the official `bw` CLI into memory. It does not create a vault export on
+disk, passes the session through the child-process environment instead of the
+command line, and clears that environment after the import. The account-store
+backup created before an import is restricted to mode `0600` and contains the
+same unencrypted TOTP secrets as the active store.
+
 Secrets are not encrypted at rest. A process running as the same user, malware,
 or an attacker with access to the unlocked account can read them. Use a
 hardware-backed authenticator if that threat is in scope.

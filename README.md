@@ -13,6 +13,7 @@ your accounts and click a code to copy it to the Wayland clipboard.
 - Automatic clipboard clearing without overwriting newer clipboard content
 - No network access or third-party Python packages
 - Account storage restricted to the current user
+- Direct TOTP import from Bitwarden and Vaultwarden
 
 ## Requirements
 
@@ -52,6 +53,18 @@ OTP_CLI="$HOME/.config/omarchy/plugins/steven.otp/bin/omarchy-otp"
 
 `add` accepts either a Base32 secret or an `otpauth://totp/...` URL. Secret
 input is hidden so it does not enter shell history.
+
+To import every TOTP entry from Bitwarden or Vaultwarden without creating an
+unencrypted export file, install the official `bitwarden-cli` package, point it
+at your server, and run:
+
+```bash
+OTP_CLI="$HOME/.config/omarchy/plugins/steven.otp/bin/omarchy-otp"
+"$OTP_CLI" import-bitwarden
+```
+
+The command uses Bitwarden's normal terminal login/unlock prompt, skips
+duplicates, creates a mode-`0600` backup, and locks a vault that it unlocked.
 
 ## Configuration
 
