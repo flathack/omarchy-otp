@@ -121,6 +121,28 @@ Panel {
     else copyAt(selectedIndex)
   }
 
+  function resetScroll() {
+    if (accountFlickable) accountFlickable.contentY = 0
+  }
+
+  function ensureCursorVisible(item) {
+    if (!item || !accountFlickable) return
+    var viewport = accountFlickable
+    var contentItem = viewport.contentItem || viewport
+    var point = item.mapToItem(contentItem, 0, 0)
+    var margin = Style.space(6)
+    var top = point.y
+    var bottom = top + item.height
+    var viewTop = viewport.contentY
+    var viewBottom = viewTop + viewport.height
+    var maxY = Math.max(0, viewport.contentHeight - viewport.height)
+
+    if (top - margin < viewTop)
+      viewport.contentY = Math.max(0, top - margin)
+    else if (bottom + margin > viewBottom)
+      viewport.contentY = Math.min(maxY, bottom + margin - viewport.height)
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -130,6 +152,7 @@ Panel {
       selectedIndex = 0
       cursorActive = false
       refresh()
+      Qt.callLater(root.resetScroll)
     }
   }
 
@@ -211,12 +234,16 @@ Panel {
       onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
 
       Flickable {
+        id: accountFlickable
         anchors.fill: parent
         contentWidth: width
         contentHeight: contentColumn.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
+        ScrollBar.vertical: ScrollBar {
+          policy: root.accounts.length > 7 ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+        }
 
         Column {
           id: contentColumn
@@ -245,6 +272,7 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 hasCursor: root.headerHasCursor
+                onHasCursorChanged: if (hasCursor) root.resetScroll()
                 onHovered: function(on) {
                   if (on) {
                     root.cursorActive = true
@@ -293,6 +321,7 @@ Panel {
                 hasCursor: root.cursorActive && root.focusSection === "accounts"
                   && root.selectedIndex === index
                 foreground: root.foreground
+                onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(accountRow)
 
                 MouseArea {
                   anchors.fill: parent
