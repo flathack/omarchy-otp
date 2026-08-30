@@ -41,7 +41,7 @@ right section of the bar.
 Remove the installed plugin with:
 
 ```bash
-omarchy plugin remove steven.otp
+omarchy plugin remove flathack.otp
 ```
 
 The encrypted account store and its GNOME Keyring key are intentionally kept
@@ -73,7 +73,7 @@ The CLI is bundled with the plugin. After installation, it can also be called
 directly:
 
 ```bash
-OTP_CLI="$HOME/.config/omarchy/plugins/steven.otp/bin/omarchy-otp"
+OTP_CLI="$HOME/.config/omarchy/plugins/flathack.otp/bin/omarchy-otp"
 "$OTP_CLI" add
 "$OTP_CLI" show
 "$OTP_CLI" remove 0
@@ -87,7 +87,7 @@ unencrypted export file, install the official `bitwarden-cli` package, point it
 at your server, and run:
 
 ```bash
-OTP_CLI="$HOME/.config/omarchy/plugins/steven.otp/bin/omarchy-otp"
+OTP_CLI="$HOME/.config/omarchy/plugins/flathack.otp/bin/omarchy-otp"
 "$OTP_CLI" import-bitwarden
 ```
 
@@ -112,7 +112,7 @@ To encrypt the active store and
 all existing plugin-created backups with AES-256-GCM, run:
 
 ```bash
-OTP_CLI="$HOME/.config/omarchy/plugins/steven.otp/bin/omarchy-otp"
+OTP_CLI="$HOME/.config/omarchy/plugins/flathack.otp/bin/omarchy-otp"
 "$OTP_CLI" encrypt-store
 ```
 
@@ -129,7 +129,7 @@ cleared if it still contains the code, so newer clipboard content is preserved.
 Change the timeout with:
 
 ```bash
-omarchy bar set steven.otp clipboardClearSeconds 60
+omarchy bar set flathack.otp clipboardClearSeconds 60
 ```
 
 Set the value to `0` to disable automatic clearing.
@@ -148,10 +148,10 @@ contracts for filtering, keyboard scrolling, confirmed deletion, stable IDs,
 and action feedback.
 
 For local development, clone or symlink the repository to
-`~/.config/omarchy/plugins/steven.otp`, then enable the widget:
+`~/.config/omarchy/plugins/flathack.otp`, then enable the widget:
 
 ```bash
-omarchy plugin enable steven.otp --section right
+omarchy plugin enable flathack.otp --section right
 ```
 
 Files under the local plugin directory hot-reload when saved.

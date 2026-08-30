@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "steven.otp",
+  "id": "flathack.otp",
   "name": "OTP Codes",
-  "version": "0.4.0",
-  "author": "Steven",
+  "version": "0.5.0",
+  "author": "flathack",
   "license": "MIT",
   "description": "Generates TOTP codes and copies them to the clipboard.",
   "kinds": [

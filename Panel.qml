@@ -8,8 +8,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "steven.otp"
-  ipcTarget: "steven.otp"
+  moduleName: "flathack.otp"
+  ipcTarget: "flathack.otp"
 
   property var accounts: []
   property string errorText: ""

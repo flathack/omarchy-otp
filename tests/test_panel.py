@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
 
 PANEL = (Path(__file__).resolve().parents[1] / "Panel.qml").read_text(encoding="utf-8")
+MANIFEST = json.loads(
+    (Path(__file__).resolve().parents[1] / "manifest.json").read_text(encoding="utf-8")
+)
 
 
 class PanelContractTests(unittest.TestCase):
+    def test_public_plugin_namespace_is_consistent(self) -> None:
+        self.assertEqual(MANIFEST["id"], "flathack.otp")
+        self.assertEqual(MANIFEST["author"], "flathack")
+        self.assertIn('moduleName: "flathack.otp"', PANEL)
+        self.assertIn('ipcTarget: "flathack.otp"', PANEL)
+
     def test_filter_forwards_regular_text_input(self) -> None:
         self.assertIn("event.accepted = false", PANEL)
         self.assertIn("root.filterText = text", PANEL)
