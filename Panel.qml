@@ -17,8 +17,7 @@ Panel {
   property string focusSection: "accounts"
   property bool cursorActive: false
   property string filterText: ""
-  property string copiedName: ""
-  property string pendingCopyName: ""
+  property string actionStatus: ""
   property bool deleteConfirmOpen: false
   property var deleteTarget: null
   property int tickEpoch: Math.floor(Date.now() / 1000)
@@ -54,7 +53,7 @@ Panel {
     if (otpProcess.running) otpProcess.running = false
     accounts = []
     errorText = ""
-    pendingCopyName = ""
+    actionStatus = ""
     deleteConfirmOpen = false
     deleteTarget = null
     cursorActive = false
@@ -97,9 +96,8 @@ Panel {
     cursorActive = true
     focusSection = "accounts"
     selectedIndex = index
-    pendingCopyName = String(entry.account.name || "OTP")
     errorText = ""
-    copyProcess.command = [helperPath, "copy", String(entry.account.index),
+    copyProcess.command = [helperPath, "copy", String(entry.account.id),
       "--clear-after", String(Math.max(0, Number(setting("clipboardClearSeconds", 30)) || 0))]
     copyProcess.running = true
   }
@@ -147,7 +145,7 @@ Panel {
 
     var account = filteredAccounts[selectedIndex].account
     deleteTarget = {
-      index: Number(account.index),
+      id: String(account.id),
       name: String(account.name || "OTP account")
     }
     deleteConfirm.selectedIndex = 1
@@ -169,7 +167,7 @@ Panel {
     if (!target || removeProcess.running) return
 
     errorText = ""
-    removeProcess.command = [helperPath, "remove", String(target.index), "--yes"]
+    removeProcess.command = [helperPath, "remove", String(target.id), "--yes"]
     removeProcess.running = true
   }
 
@@ -230,12 +228,11 @@ Panel {
     onExited: function(exitCode) {
       var failure = String(copyStderr.text || "").trim()
       if (exitCode === 0) {
-        root.copiedName = root.pendingCopyName
-        copiedTimer.restart()
+        root.actionStatus = "COPIED"
+        actionTimer.restart()
       } else {
         root.errorText = failure || "Could not copy the code."
       }
-      root.pendingCopyName = ""
     }
     stderr: StdioCollector { id: copyStderr; waitForEnd: true }
   }
@@ -244,8 +241,11 @@ Panel {
     id: removeProcess
     onExited: function(exitCode) {
       var failure = String(removeStderr.text || "").trim()
-      if (exitCode === 0) root.refresh()
-      else root.errorText = failure || "Could not delete the account."
+      if (exitCode === 0) {
+        root.actionStatus = "DELETED"
+        actionTimer.restart()
+        root.refresh()
+      } else root.errorText = failure || "Could not delete the account."
       Qt.callLater(root.focusFilter)
     }
     stderr: StdioCollector { id: removeStderr; waitForEnd: true }
@@ -262,9 +262,9 @@ Panel {
   }
 
   Timer {
-    id: copiedTimer
+    id: actionTimer
     interval: 1400
-    onTriggered: root.copiedName = ""
+    onTriggered: root.actionStatus = ""
   }
 
   BarIconButton {
@@ -316,7 +316,7 @@ Panel {
             meta: root.filterText === ""
               ? (root.accounts.length === 1 ? "1 account" : root.accounts.length + " accounts")
               : root.filteredAccounts.length + " of " + root.accounts.length + " accounts"
-            detail: root.copiedName === "" ? "" : "COPIED"
+            detail: root.actionStatus
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconComponent: Component {

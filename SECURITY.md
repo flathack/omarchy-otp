@@ -8,7 +8,10 @@ network requests.
 
 The configuration directory is forced to mode `0700` and the account file to
 `0600`. Symlinks at either location are rejected. Updates use an atomic
-same-directory replacement with a uniquely named temporary file.
+same-directory replacement with a uniquely named temporary file and fsync the
+containing directory. A mode-`0600` advisory lock serializes migrations and
+all read-modify-write operations to prevent concurrent updates from losing or
+targeting the wrong account.
 
 The optional Bitwarden/Vaultwarden importer reads decrypted items directly
 from the official `bw` CLI into memory. It does not create a vault export on
@@ -22,6 +25,10 @@ authenticated format metadata. Its random 256-bit key is stored in GNOME
 Keyring through Secret Service. The key is never placed in the account file or
 on a child-process command line. Migration performs an in-memory decrypt
 self-check before atomically replacing each plaintext file.
+
+Older stores receive stable random UUIDs on first use. Before this automatic
+migration, the plugin creates a backup in the same encrypted or plaintext
+format as the active store.
 
 This protects account files and their backups at rest. Once the desktop keyring
 is unlocked, a process running as the same user may be able to request the key;

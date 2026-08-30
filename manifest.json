@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "steven.otp",
   "name": "OTP Codes",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "author": "Steven",
   "license": "MIT",
   "description": "Generates TOTP codes and copies them to the clipboard.",

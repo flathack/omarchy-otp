@@ -3,12 +3,15 @@ from __future__ import annotations
 import base64
 import importlib.machinery
 import json
+import multiprocessing
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+import uuid
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 OTP = importlib.machinery.SourceFileLoader(
     "omarchy_otp", str(ROOT / "bin" / "omarchy-otp")
 ).load_module()
+
+
+def hold_store_lock(ready, release) -> None:
+    with OTP.store_lock():
+        ready.set()
+        release.wait(timeout=2)
 
 
 class TotpTests(unittest.TestCase):
@@ -110,6 +119,7 @@ class TotpTests(unittest.TestCase):
         serialized = json.dumps(rows)
         self.assertNotIn(secret, serialized)
         self.assertEqual(rows[0]["name"], "Example")
+        uuid.UUID(rows[0]["id"])
         self.assertIn("code", rows[0])
         self.assertIn("counter", rows[0])
 
@@ -166,6 +176,54 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(OTP.load_accounts(), [account])
         self.assertEqual(os.stat(OTP.CONFIG_DIR).st_mode & 0o777, 0o700)
         self.assertEqual(os.stat(OTP.CONFIG_FILE).st_mode & 0o777, 0o600)
+        self.assertEqual(
+            os.stat(OTP.CONFIG_DIR / "accounts.lock").st_mode & 0o777, 0o600
+        )
+
+    def test_legacy_encrypted_store_migrates_ids_with_backup(self) -> None:
+        legacy = {
+            "name": "Legacy",
+            "issuer": "Example",
+            "secret": "JBSWY3DPEHPK3PXP",
+            "digits": 6,
+            "period": 30,
+            "algorithm": "SHA1",
+        }
+        OTP.ensure_store()
+        key = b"k" * 32
+        OTP.write_json_file(OTP.CONFIG_FILE, OTP.encrypt_accounts([legacy], key))
+
+        with mock.patch.object(OTP, "store_key", return_value=key):
+            migrated = OTP.load_accounts()
+
+        uuid.UUID(migrated[0]["id"])
+        active = json.loads(OTP.CONFIG_FILE.read_text(encoding="utf-8"))
+        self.assertTrue(OTP.encrypted_document(active))
+        self.assertEqual(OTP.decrypt_accounts(active, key), migrated)
+        backups = list(OTP.CONFIG_DIR.glob("accounts.json.backup-*"))
+        self.assertEqual(len(backups), 1)
+        backup = json.loads(backups[0].read_text(encoding="utf-8"))
+        self.assertEqual(OTP.decrypt_accounts(backup, key), [legacy])
+
+    def test_store_lock_serializes_access(self) -> None:
+        OTP.ensure_store()
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        release = context.Event()
+        process = context.Process(target=hold_store_lock, args=(ready, release))
+        process.start()
+        self.assertTrue(ready.wait(timeout=2))
+
+        finished = threading.Event()
+        loader = threading.Thread(target=lambda: (OTP.load_accounts(), finished.set()))
+        loader.start()
+        self.assertFalse(finished.wait(timeout=0.1))
+        release.set()
+        self.assertTrue(finished.wait(timeout=2))
+        loader.join(timeout=2)
+        process.join(timeout=2)
+
+        self.assertEqual(process.exitcode, 0)
 
     def test_encrypted_store_round_trip_and_authentication(self) -> None:
         account = OTP.normalize_account(
@@ -251,6 +309,20 @@ class StoreTests(unittest.TestCase):
         serialized = OTP.CONFIG_FILE.read_text(encoding="utf-8")
         self.assertNotIn(first["secret"], serialized)
         self.assertNotIn(second["secret"], serialized)
+
+    def test_remove_uses_stable_id_after_reordering(self) -> None:
+        first = OTP.normalize_account(
+            {"name": "First", "secret": "JBSWY3DPEHPK3PXP"}
+        )
+        second = OTP.normalize_account(
+            {"name": "Second", "secret": "KRUGS4ZANFZSAYJA"}
+        )
+        OTP.save_accounts([second, first])
+
+        with mock.patch.object(sys, "stdout", new_callable=StringIO):
+            self.assertEqual(OTP.command_remove(first["id"], assume_yes=True), 0)
+
+        self.assertEqual(OTP.load_accounts(), [second])
 
     def test_rejects_symlinked_store(self) -> None:
         OTP.CONFIG_DIR.mkdir(mode=0o700, parents=True)

@@ -16,6 +16,7 @@ your accounts and click a code to copy it to the Wayland clipboard.
 - Direct TOTP import from Bitwarden and Vaultwarden
 - Instant account filtering by name or issuer for larger lists
 - Optional AES-256-GCM encryption backed by GNOME Keyring
+- Stable account IDs and serialized store updates for safe concurrent actions
 
 ## Requirements
 
@@ -81,7 +82,12 @@ ${XDG_CONFIG_HOME:-~/.config}/omarchy-otp/accounts.json
 ```
 
 The directory is set to mode `0700` and the file to `0600`. Plaintext storage
-remains available for minimal installations. To encrypt the active store and
+remains available for minimal installations. Version 0.4 automatically assigns
+stable UUIDs to older account entries on first use and creates a protected
+backup before migrating them. A mode-`0600` lock file serializes updates so
+simultaneous panel and CLI actions cannot overwrite each other.
+
+To encrypt the active store and
 all existing plugin-created backups with AES-256-GCM, run:
 
 ```bash
@@ -115,6 +121,10 @@ Run the tests and validate the plugin manifest:
 python3 -m unittest discover -s tests -v
 omarchy plugin validate .
 ```
+
+The suite includes store migration and locking tests plus source-level panel
+contracts for filtering, keyboard scrolling, confirmed deletion, stable IDs,
+and action feedback.
 
 For local development, clone or symlink the repository to
 `~/.config/omarchy/plugins/steven.otp`, then enable the widget:
