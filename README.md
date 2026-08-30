@@ -36,6 +36,27 @@ omarchy plugin add https://github.com/flathack/omarchy-otp.git --enable
 Omarchy asks where the widget should be placed. The suggested location is the
 right section of the bar.
 
+## Uninstall
+
+Remove the installed plugin with:
+
+```bash
+omarchy plugin remove steven.otp
+```
+
+The encrypted account store and its GNOME Keyring key are intentionally kept
+so reinstalling the plugin restores access. To remove all local OTP data as a
+separate, deliberate step, move the store to the desktop trash first and then
+clear its key:
+
+```bash
+gio trash "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-otp"
+secret-tool clear application omarchy-otp purpose account-store
+```
+
+After the key is cleared, any remaining encrypted store or backup is
+unrecoverable.
+
 ## Usage
 
 - Left-click the key icon to open or close the code list.
