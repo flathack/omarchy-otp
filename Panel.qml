@@ -395,6 +395,7 @@ Panel {
             visible: root.errorText !== ""
             width: parent.width
             text: root.errorText
+            textFormat: Text.PlainText
             color: Color.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -485,6 +486,7 @@ Panel {
                     Text {
                       Layout.fillWidth: true
                       text: accountRow.modelData.account.name
+                      textFormat: Text.PlainText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
@@ -496,6 +498,7 @@ Panel {
                       Layout.fillWidth: true
                       visible: text !== ""
                       text: accountRow.modelData.account.issuer || ""
+                      textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption

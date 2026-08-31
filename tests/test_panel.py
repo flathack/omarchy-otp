@@ -42,6 +42,16 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn('root.actionStatus = "COPIED"', PANEL)
         self.assertIn('root.actionStatus = "DELETED"', PANEL)
 
+    def test_external_text_is_rendered_as_plain_text(self) -> None:
+        for binding in (
+            "text: root.errorText",
+            "text: accountRow.modelData.account.name",
+            'text: accountRow.modelData.account.issuer || ""',
+        ):
+            start = PANEL.index(binding)
+            text_block = PANEL[start : PANEL.index("}", start)]
+            self.assertIn("textFormat: Text.PlainText", text_block)
+
 
 if __name__ == "__main__":
     unittest.main()
