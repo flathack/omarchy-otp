@@ -38,10 +38,11 @@ either threat is in scope.
 
 ## Clipboard behavior
 
-Copied OTP codes are cleared after 30 seconds by default. Before clearing, the
-helper checks that the clipboard still contains the same code. It never clears
-content copied afterward. The timeout can be changed or disabled through the
-widget setting `clipboardClearSeconds`.
+Copied OTP codes are cleared after 30 seconds by default. The helper keeps the
+specific clipboard-provider process it started and terminates only that process
+after the timeout. If another application replaces the clipboard first, the
+original provider exits and the newer content is left untouched. The timeout can
+be changed or disabled through the widget setting `clipboardClearSeconds`.
 
 Other applications running in the Wayland session may be able to read clipboard
 content while a code is present.

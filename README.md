@@ -26,7 +26,7 @@ your accounts and click a code to copy it to the Wayland clipboard.
 
 - A current Omarchy installation with the plugin-based shell
 - Python 3.10 or newer
-- `wl-copy` and `wl-paste` from `wl-clipboard`
+- `wl-copy` from `wl-clipboard`
 - For encrypted storage: `python-cryptography` and `secret-tool` from `libsecret`
 
 ## Install

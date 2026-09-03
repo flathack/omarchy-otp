@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -492,13 +493,18 @@ def command_import_bitwarden() -> int:
         if invalid:
             print(f"Skipped {invalid} invalid OTP entr{'y' if invalid == 1 else 'ies'}.")
     finally:
+        if previous_status == "unauthenticated":
+            subprocess.run(
+                ["bw", "logout"], env=environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            )
+        elif previous_status == "locked":
+            subprocess.run(
+                ["bw", "lock"], env=environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            )
         session = ""
         environment.pop("BW_SESSION", None)
-        if previous_status != "unlocked":
-            subprocess.run(
-                ["bw", "lock"], stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, check=False,
-            )
     return 0
 
 
@@ -510,41 +516,67 @@ def command_list() -> int:
 def command_copy(selector: str | int, clear_after: int) -> int:
     if shutil.which("wl-copy") is None:
         raise ValueError("wl-copy is missing; install the wl-clipboard package")
-    if clear_after > 0 and shutil.which("wl-paste") is None:
-        raise ValueError("wl-paste is missing; install the wl-clipboard package")
     with store_lock():
         accounts = _load_accounts_unlocked()
         _, account = resolve_account(accounts, selector)
         code, _ = totp(account)
-    subprocess.run(["wl-copy"], input=code, text=True, check=True)
+
+    clipboard = subprocess.Popen(
+        ["wl-copy", "--foreground"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        if clipboard.stdin is not None:
+            clipboard.stdin.write(code)
+            clipboard.stdin.close()
+    except (BrokenPipeError, OSError) as exc:
+        clipboard.kill()
+        clipboard.wait()
+        raise ValueError("Could not copy the code to the clipboard") from exc
+    if clipboard.poll() is not None:
+        raise ValueError("Could not copy the code to the clipboard")
+
     if clear_after > 0:
+        start_token = process_start_token(clipboard.pid)
+        if start_token is None:
+            return 0
         worker = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "_clear", str(clear_after)],
-            stdin=subprocess.PIPE,
+            [
+                sys.executable, str(Path(__file__).resolve()), "_clear",
+                str(clear_after), str(clipboard.pid), start_token,
+            ],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
             start_new_session=True,
         )
-        if worker.stdin is not None:
-            worker.stdin.write(code)
-            worker.stdin.close()
     return 0
 
 
-def command_clear(clear_after: int) -> int:
-    code = sys.stdin.read()
-    if not code:
-        return 0
+def process_start_token(pid: int) -> str | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    closing_parenthesis = stat.rfind(")")
+    if closing_parenthesis == -1:
+        return None
+    fields = stat[closing_parenthesis + 2 :].split()
+    return fields[19] if len(fields) > 19 else None
+
+
+def command_clear(clear_after: int, pid: int, start_token: str) -> int:
     time.sleep(max(0, clear_after))
-    current = subprocess.run(
-        ["wl-paste", "--no-newline"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if current.returncode == 0 and current.stdout == code:
-        subprocess.run(["wl-copy", "--clear"], check=False)
+    if process_start_token(pid) == start_token:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     return 0
 
 
@@ -660,6 +692,8 @@ def main() -> int:
     copy.add_argument("--clear-after", type=int, default=30)
     clear = sub.add_parser("_clear", help=argparse.SUPPRESS)
     clear.add_argument("seconds", type=int)
+    clear.add_argument("pid", type=int)
+    clear.add_argument("start_token")
     sub.add_parser("show", help="list configured accounts")
     args = parser.parse_args()
     if args.command == "list":
@@ -667,7 +701,7 @@ def main() -> int:
     if args.command == "copy":
         return command_copy(args.account, max(0, args.clear_after))
     if args.command == "_clear":
-        return command_clear(args.seconds)
+        return command_clear(args.seconds, args.pid, args.start_token)
     if args.command == "add":
         return command_add()
     if args.command == "import-bitwarden":

@@ -5,6 +5,7 @@ import importlib.machinery
 import json
 import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -125,33 +126,76 @@ class TotpTests(unittest.TestCase):
 
     def test_clipboard_clear_preserves_newer_content(self) -> None:
         with (
-            mock.patch.object(sys, "stdin", StringIO("123456")),
             mock.patch.object(time, "sleep"),
+            mock.patch.object(OTP, "process_start_token", return_value="new"),
+            mock.patch.object(os, "kill") as kill,
+        ):
+            self.assertEqual(OTP.command_clear(30, 123, "old"), 0)
+        kill.assert_not_called()
+
+    def test_clipboard_clear_removes_unchanged_code(self) -> None:
+        with (
+            mock.patch.object(time, "sleep"),
+            mock.patch.object(OTP, "process_start_token", return_value="same"),
+            mock.patch.object(os, "kill") as kill,
+        ):
+            self.assertEqual(OTP.command_clear(30, 123, "same"), 0)
+        kill.assert_called_once_with(123, signal.SIGTERM)
+
+    def test_copy_uses_a_tracked_foreground_clipboard_provider(self) -> None:
+        clipboard_stdin = mock.MagicMock()
+        clipboard = SimpleNamespace(
+            pid=321, stdin=clipboard_stdin, poll=mock.Mock(return_value=None)
+        )
+        worker = SimpleNamespace()
+        with (
+            mock.patch.object(OTP, "store_lock", return_value=mock.MagicMock()),
+            mock.patch.object(
+                OTP, "_load_accounts_unlocked", return_value=[{"id": "account"}]
+            ),
+            mock.patch.object(OTP, "totp", return_value=("123456", 30)),
+            mock.patch.object(OTP.shutil, "which", return_value="/usr/bin/wl-copy"),
+            mock.patch.object(OTP, "process_start_token", return_value="start"),
+            mock.patch.object(
+                subprocess, "Popen", side_effect=[clipboard, worker]
+            ) as popen,
+        ):
+            self.assertEqual(OTP.command_copy("account", 30), 0)
+
+        self.assertEqual(popen.call_args_list[0].args[0], ["wl-copy", "--foreground"])
+        self.assertEqual(
+            popen.call_args_list[1].args[0][-3:], ["30", "321", "start"]
+        )
+        clipboard_stdin.write.assert_called_once_with("123456")
+        clipboard_stdin.close.assert_called_once_with()
+
+    def test_bitwarden_import_logs_out_a_new_login(self) -> None:
+        with (
+            mock.patch.object(
+                OTP, "bitwarden_session", return_value=("session", "unauthenticated")
+            ),
+            mock.patch.object(OTP, "store_lock", return_value=mock.MagicMock()),
+            mock.patch.object(OTP, "_load_accounts_unlocked", return_value=[]),
+            mock.patch.object(
+                OTP, "merge_bitwarden_accounts", return_value=([], 0, 0, 0)
+            ),
             mock.patch.object(
                 subprocess,
                 "run",
-                return_value=SimpleNamespace(returncode=0, stdout="new content"),
+                side_effect=[
+                    SimpleNamespace(stdout=""),
+                    SimpleNamespace(stdout="[]"),
+                    SimpleNamespace(),
+                ],
             ) as run,
         ):
-            self.assertEqual(OTP.command_clear(30), 0)
-        run.assert_called_once_with(
-            ["wl-paste", "--no-newline"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+            self.assertEqual(OTP.command_import_bitwarden(), 0)
 
-    def test_clipboard_clear_removes_unchanged_code(self) -> None:
-        paste = SimpleNamespace(returncode=0, stdout="123456")
-        cleared = SimpleNamespace(returncode=0, stdout="")
-        with (
-            mock.patch.object(sys, "stdin", StringIO("123456")),
-            mock.patch.object(time, "sleep"),
-            mock.patch.object(subprocess, "run", side_effect=[paste, cleared]) as run,
-        ):
-            self.assertEqual(OTP.command_clear(30), 0)
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args_list[1], mock.call(["wl-copy", "--clear"], check=False))
+        self.assertEqual(run.call_args_list[2].args[0], ["bw", "logout"])
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [["bw", "sync"], ["bw", "list", "items"], ["bw", "logout"]],
+        )
 
 
 class StoreTests(unittest.TestCase):
