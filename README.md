@@ -3,6 +3,10 @@
 A native Omarchy bar widget for generating TOTP codes. Open the panel to see
 your accounts and click a code to copy it to the Wayland clipboard.
 
+## Screenshot
+
+![Omarchy OTP screenshot with blurred OTP codes](docs/omarchy-otp-screenshot.png)
+
 ## Features
 
 - Native Omarchy/Quickshell bar widget and popup
